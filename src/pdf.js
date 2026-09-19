@@ -39,12 +39,33 @@ async function exportToPdf({ context }, inputPath, outputPath) {
   });
   logger.info('所有图片节点探测完毕');
 
+  // 核心修复：注入打印分页中和样式，彻底消除 CSS 中的强制分页指令（page-break-* / break-*）
+  // 避免 Chromium print 引擎将内容切为多页并导致正文丢失
+  logger.info('正在注入分页中和样式，防止 CSS 强制分页导致单页截断...');
+  await page.addStyleTag({
+    content: `
+      @media print, all {
+        *, *::before, *::after {
+          page-break-before: auto !important;
+          page-break-after: auto !important;
+          page-break-inside: auto !important;
+          break-before: auto !important;
+          break-after: auto !important;
+          break-inside: auto !important;
+        }
+      }
+    `
+  });
+  logger.info('分页中和样式注入完成');
+
   logger.info('正在计算页面文档实际高度以实现单页完美渲染...');
   // 计算文档的确切尺寸，确保内容没有任何裁剪
   const dimensions = await page.evaluate(() => {
+    const docEl = document.documentElement;
+    const body = document.body;
     return {
-      width: document.documentElement.scrollWidth,
-      height: document.documentElement.scrollHeight
+      width: Math.max(docEl.scrollWidth, body ? body.scrollWidth : 0),
+      height: Math.max(docEl.scrollHeight, body ? body.scrollHeight : 0)
     };
   });
   logger.info('文档尺寸计算完成', { width: dimensions.width, height: dimensions.height });
