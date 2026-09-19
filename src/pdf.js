@@ -39,9 +39,55 @@ async function exportToPdf({ context }, inputPath, outputPath) {
   });
   logger.info('所有图片节点探测完毕');
 
-  // 核心修复：注入打印分页中和样式，彻底消除 CSS 中的强制分页指令（page-break-* / break-*）
-  // 避免 Chromium print 引擎将内容切为多页并导致正文丢失
-  logger.info('正在注入分页中和样式，防止 CSS 强制分页导致单页截断...');
+  // 核心加固：物理清洗 CSSOM 与 DOM 中所有分页控制属性，彻底消除 CSS 特异性（Specificity）导致的样式覆盖失效
+  logger.info('正在深度物理清洗 CSSOM 与 DOM 中的分页规则...');
+  await page.evaluate(() => {
+    const properties = [
+      'page-break-before',
+      'page-break-after',
+      'page-break-inside',
+      'break-before',
+      'break-after',
+      'break-inside'
+    ];
+
+    // 1. 递归清洗所有样式表中的规则（包括 @media print 嵌套规则）
+    function cleanRules(rules) {
+      if (!rules) return;
+      for (let i = 0; i < rules.length; i++) {
+        const rule = rules[i];
+        if (rule.style) {
+          for (const prop of properties) {
+            rule.style.removeProperty(prop);
+          }
+        }
+        if (rule.cssRules) {
+          cleanRules(rule.cssRules);
+        }
+      }
+    }
+
+    for (const sheet of document.styleSheets) {
+      try {
+        cleanRules(sheet.cssRules || sheet.rules);
+      } catch (e) {
+        // 忽略跨域样式表的访问限制
+      }
+    }
+
+    // 2. 清除所有 DOM 元素上的内联 style 属性
+    document.querySelectorAll('*').forEach(el => {
+      if (el.style) {
+        for (const prop of properties) {
+          el.style.removeProperty(prop);
+        }
+      }
+    });
+  });
+  logger.info('CSSOM 与 DOM 分页规则物理清洗完成');
+
+  // 3. 叠加注入通配符重置样式作为第二道兜底保护
+  logger.info('正在注入全局分页重置样式作为兜底保护...');
   await page.addStyleTag({
     content: `
       @media print, all {
@@ -56,7 +102,7 @@ async function exportToPdf({ context }, inputPath, outputPath) {
       }
     `
   });
-  logger.info('分页中和样式注入完成');
+  logger.info('全局重置样式注入完成');
 
   logger.info('正在计算页面文档实际高度以实现单页完美渲染...');
   // 计算文档的确切尺寸，确保内容没有任何裁剪
